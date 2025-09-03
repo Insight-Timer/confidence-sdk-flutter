@@ -90,6 +90,30 @@ class ConfidenceFlutterSdk {
     return resolveKey(key) ?? defaultValue;
   }
 
+  bool getBoolSecretly(String key, bool defaultValue) {
+    return resolveKey(key) ?? defaultValue;
+  }
+
+  int getIntSecretly(String key, int defaultValue) {
+    return resolveKey<int>(key) ?? defaultValue;
+  }
+
+  String getStringSecretly(String key, String defaultValue) {
+    return resolveKey(key) ?? defaultValue;
+  }
+
+  Map<String, dynamic> getObjectSecretly(String key, Map<String, dynamic> defaultValue) {
+    return resolveKey(key) ?? defaultValue;
+  }
+
+  double getDoubleSecretly(String key, double defaultValue) {
+    return resolveKey(key) ?? defaultValue;
+  }
+
+  Map<String, dynamic> getAllSecretly() {
+    return _flags;
+  }
+
   Future<void> setup(String apiKey) async {
     return await ConfidenceFlutterSdkPlatform.instance.setup(apiKey);
   }
