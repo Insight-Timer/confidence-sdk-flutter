@@ -114,8 +114,8 @@ class ConfidenceFlutterSdk {
     return _flags;
   }
 
-  Future<void> setup(String apiKey) async {
-    return await ConfidenceFlutterSdkPlatform.instance.setup(apiKey);
+  Future<void> setup(String apiKey, [LoggingLevel loggingLevel = LoggingLevel.WARN]) async {
+    return await ConfidenceFlutterSdkPlatform.instance.setup(apiKey, loggingLevel);
   }
 
   Future<void> fetchAndActivate() async {
@@ -132,4 +132,12 @@ class ConfidenceFlutterSdk {
     await ConfidenceFlutterSdkPlatform.instance.activateAndFetchAsync();
     await fillAllFlags();
   }
+}
+
+enum LoggingLevel {
+  VERBOSE, // 0
+  DEBUG, // 1
+  WARN, // 2
+  ERROR, // 3
+  NONE // 4
 }
