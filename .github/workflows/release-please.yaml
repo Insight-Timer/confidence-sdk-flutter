@@ -10,10 +10,9 @@ jobs:
 
     # Release-please creates a PR that tracks all changes
     steps:
-      - uses: googleapis/release-please-action@v4.3.0
+      - uses: googleapis/release-please-action@v4
         id: release
         with:
-          release-type: simple
           command: manifest
           default-branch: main
 
@@ -54,7 +53,11 @@ jobs:
       - name: Remove the submodule
         working-directory: ios/Classes
         run: rm -rf confidence-sdk && git rm -r --cached .
-
+      
+      - name: Prepare pub for dry-run
+        working-directory: ios/Classes
+        run: git add ConfidenceFlutterSdkPlugin.swift
+      
       - name: Setup Pub Credentials
         shell: bash
         env:
