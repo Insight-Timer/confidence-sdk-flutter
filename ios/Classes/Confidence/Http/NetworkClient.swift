@@ -1,16 +1,18 @@
 import Foundation
 
-final public class NetworkClient: HttpClient {
+final class NetworkClient: HttpClient {
     private let headers: [String: String]
     private let retry: Retry
     private let session: URLSession
     private let baseUrl: String
+    private var timeoutIntervalForRequests: Double
 
     public init(
         session: URLSession? = nil,
         baseUrl: String,
         defaultHeaders: [String: String] = [:],
-        retry: Retry = .none
+        retry: Retry = .none,
+        timeoutIntervalForRequests: Double
     ) {
         self.session =
         session
@@ -24,6 +26,7 @@ final public class NetworkClient: HttpClient {
         self.headers = defaultHeaders
         self.retry = retry
         self.baseUrl = baseUrl
+        self.timeoutIntervalForRequests = timeoutIntervalForRequests
     }
 
     public func post<T: Decodable>(
@@ -131,10 +134,10 @@ extension NetworkClient {
                 do {
                     response.decodedError = try decoder.decode(HttpError.self, from: responseData)
                 } catch {
-                    let message = String(decoding: responseData, as: UTF8.self)
+                    let message = String(data: responseData, encoding: .utf8)
                     response.decodedError = HttpError(
                         code: httpURLResponse.statusCode,
-                        message: message,
+                        message: message ?? "{Error when decoding error message}",
                         details: []
                     )
                 }

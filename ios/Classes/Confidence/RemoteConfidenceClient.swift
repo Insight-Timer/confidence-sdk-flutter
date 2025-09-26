@@ -23,7 +23,11 @@ public class RemoteConfidenceClient: ConfidenceClient {
         case .usa:
             self.baseUrl = "https://events.us.confidence.dev/v1/events"
         }
-        self.httpClient = NetworkClient(session: session, baseUrl: baseUrl)
+        self.httpClient = NetworkClient(
+            session: session,
+            baseUrl: baseUrl,
+            timeoutIntervalForRequests: options.timeoutIntervalForRequest
+        )
         self.metadata = metadata
         self.debugLogger = debugLogger
     }
@@ -46,11 +50,22 @@ public class RemoteConfidenceClient: ConfidenceClient {
             switch result {
             case .success(let successData):
                 let status = successData.response.statusCode
+                let indecesWithError = successData.decodedData?.errors.map { error in
+                    error.index
+                } ?? []
+                let successEventNames = events.enumerated()
+                    // Filter only events in batch that have no error reported from backend
+                    .filter { index, _ in
+                        return !(indecesWithError.contains(index))
+                    }
+                    .map { _, event in
+                        event.eventDefinition
+                    }
                 switch status {
                 case 200:
                     // clean up in case of success
                     debugLogger?.logMessage(
-                        message: "Event upload: HTTP status 200",
+                        message: "Event upload: HTTP status 200. Events: \(successEventNames.joined(separator: ","))",
                         isWarning: false
                     )
                     return true

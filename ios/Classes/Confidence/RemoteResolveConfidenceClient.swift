@@ -1,6 +1,6 @@
 import Foundation
 
-public class RemoteConfidenceResolveClient: ConfidenceResolveClient {
+class RemoteConfidenceResolveClient: ConfidenceResolveClient {
     private let targetingKey = "targeting_key"
     private var options: ConfidenceClientOptions
     private let metadata: ConfidenceMetadata
@@ -19,7 +19,8 @@ public class RemoteConfidenceResolveClient: ConfidenceResolveClient {
         self.metadata = metadata
         self.httpClient = NetworkClient(
             session: session,
-            baseUrl: BaseUrlMapper.from(region: options.region))
+            baseUrl: BaseUrlMapper.from(region: options.region),
+            timeoutIntervalForRequests: options.timeoutIntervalForRequest)
     }
 
     // MARK: Resolver
@@ -68,7 +69,9 @@ public class RemoteConfidenceResolveClient: ConfidenceResolveClient {
             return ResolvedValue(
                 value: nil,
                 flag: try displayName(resolvedFlag: resolvedFlag),
-                resolveReason: resolvedFlag.reason)
+                resolveReason: resolvedFlag.reason,
+                shouldApply: true
+            )
         }
 
         let value = ConfidenceValue(
@@ -80,7 +83,8 @@ public class RemoteConfidenceResolveClient: ConfidenceResolveClient {
             variant: variant,
             value: value,
             flag: try displayName(resolvedFlag: resolvedFlag),
-            resolveReason: resolvedFlag.reason
+            resolveReason: resolvedFlag.reason,
+            shouldApply: true
         )
     }
 

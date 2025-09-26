@@ -164,8 +164,30 @@ public class ConfidenceValue: Equatable, Codable, CustomStringConvertible {
         if case let .structure(values) = value {
             return values.mapValues { ConfidenceValue(valueInternal: $0) }
         }
-
         return nil
+    }
+
+    func asNative() -> Any {
+        switch value {
+        case .boolean(let bool):
+            return bool
+        case .string(let string):
+            return string
+        case .integer(let int):
+            return int
+        case .double(let double):
+            return double
+        case .date(let dateComponents):
+            return dateComponents
+        case .timestamp(let date):
+            return date
+        case .list(let values):
+            return values.map { ConfidenceValue(valueInternal: $0).asNative() }
+        case .structure(let values):
+            return values.mapValues { ConfidenceValue(valueInternal: $0).asNative() }
+        case .null:
+            return NSNull()
+        }
     }
 
     public func isNull() -> Bool {
@@ -221,7 +243,6 @@ public enum ConfidenceValueType: CaseIterable {
     case structure
     case null
 }
-
 
 /// Serializable data structure meant for event sending via Confidence
 private enum ConfidenceValueInternal: Equatable, Codable {
