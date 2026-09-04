@@ -9,14 +9,15 @@ on:
 jobs:
   ios-test:
     runs-on: macos-latest
+    timeout-minutes: 45
 
     env:
       FLUTTER_CHANNEL: stable
-      FLUTTER_VERSION: 3.27.3
+      FLUTTER_VERSION: 3.44.0
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v2
+        uses: actions/checkout@v6
 
       - name: fetch submodules
         run: git submodule update --init --recursive
@@ -33,9 +34,12 @@ jobs:
         working-directory: ios/Classes
         run: git rm confidence-sdk
 
-      - uses: futureware-tech/simulator-action@v3
-        with:
-          model: 'iPhone 16'
+      - name: Select iOS simulator
+        id: simulator
+        run: |
+          SIMULATOR=$(xcrun simctl list devices available -j | python3 .github/scripts/find-simulator.py iOS)
+          echo "udid=$SIMULATOR" >> "$GITHUB_OUTPUT"
+          echo "Using simulator: $SIMULATOR"
 
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
@@ -44,4 +48,9 @@ jobs:
           channel: ${{ env.FLUTTER_CHANNEL }}
 
       - run: echo API_KEY=${{ secrets.TEST_API_KEY }} > example/.env
-      - run: cd example && flutter drive --driver=test_drive/integration_test.dart --target=test/widget_test.dart
+      - name: Run iOS integration tests
+        timeout-minutes: 30
+        run: |
+          flutter config --no-enable-swift-package-manager
+          xcrun simctl boot "${{ steps.simulator.outputs.udid }}"
+          cd example && flutter test -d "${{ steps.simulator.outputs.udid }}" integration_test/widget_test.dart

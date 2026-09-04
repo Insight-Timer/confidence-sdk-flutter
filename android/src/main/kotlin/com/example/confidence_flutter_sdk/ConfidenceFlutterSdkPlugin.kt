@@ -44,11 +44,22 @@ class ConfidenceFlutterSdkPlugin: FlutterPlugin, MethodCallHandler, ActivityAwar
       "setup" -> {
         val apiKey = call.argument<String>("apiKey")!!
         val loggingLevel = call.argument<String>("loggingLevel")!!
-        confidence = ConfidenceFactory.create(
-          context,
-          apiKey,
-          loggingLevel = LoggingLevel.valueOf(loggingLevel)
-        )
+        val resolveBaseUrl = call.argument<String>("resolveBaseUrl")
+        val resolvedLoggingLevel = LoggingLevel.valueOf(loggingLevel)
+        confidence = if (resolveBaseUrl.isNullOrBlank()) {
+          ConfidenceFactory.create(
+            context,
+            apiKey,
+            loggingLevel = resolvedLoggingLevel
+          )
+        } else {
+          ConfidenceFactory.create(
+            context,
+            apiKey,
+            resolveBaseUrl = resolveBaseUrl,
+            loggingLevel = resolvedLoggingLevel
+          )
+        }
         result.success(null)
       }
       "fetchAndActivate" -> {
@@ -100,9 +111,11 @@ class ConfidenceFlutterSdkPlugin: FlutterPlugin, MethodCallHandler, ActivityAwar
         result.success(Json.encodeToString(NetworkConfidenceValueSerializer, value))
       }
       "readAllFlags" -> {
-        val flags = readAllFlags()
-        val map = flags.flags.associateBy({ it.flag }, { ConfidenceValue.Struct(it.value) })
-        result.success(Json.encodeToString(NetworkConfidenceValueSerializer, ConfidenceValue.Struct(map)))
+        coroutineScope.launch {
+          val flags = readAllFlags()
+          val map = flags.flags.associateBy({ it.flag }, { ConfidenceValue.Struct(it.value) })
+          result.success(Json.encodeToString(NetworkConfidenceValueSerializer, ConfidenceValue.Struct(map)))
+        }
       }
       "putContext" -> {
         val key = call.argument<String>("key")!!
