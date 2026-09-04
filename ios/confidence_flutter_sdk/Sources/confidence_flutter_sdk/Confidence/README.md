@@ -1,0 +1,222 @@
+
+# Confidence Vanilla SDK
+It is possible to use Confidence without the Open Feature SDK. Below you'll find instructions on how to run Confidence "vanilla".
+
+## Dependency Setup
+
+### Swift Package Manager
+
+<!---x-release-please-start-version-->
+In the dependencies section of Package.swift add:
+```swift
+.package(url: "git@github.com:spotify/confidence-sdk-swift.git", from: "1.4.4")
+```
+<!---x-release-please-end-->
+
+and in the target dependencies section add:
+```swift
+.product(name: "Confidence", package: "confidence-sdk-swift"),
+```
+
+### Xcode Dependencies
+
+You have two options, both start from File > Add Packages... in the code menu.
+
+First, ensure you have your GitHub account added as an option (+ > Add Source Control Account...). You will need to create a [Personal Access Token](https://github.com/settings/tokens) with the permissions defined in the Xcode interface.
+
+1. Add as a remote repository
+    * Search for `git@github.com:spotify/confidence-sdk-swift.git` and click "Add Package"
+2. Clone the repository locally (only recommended if you are making changes to the SDK)
+    * Clone locally using your preferred method
+    * Use the "Add Local..." button to select the local folder
+
+### Swift 6 support
+
+If your app is using some of the features of Swift 6, we recommend setting the **Strict Concurrency Checking** to 
+**Minimal**.
+
+### Creating the Confidence instance
+
+```swift
+import Confidence
+
+let confidence = Confidence
+   .Builder(clientSecret: "mysecret", loggerLevel: .NONE)
+   .withContext(context: ["user_id": ConfidenceValue(string: "user_1")])
+   .build()
+await confidence.fetchAndActivate()
+```
+
+- The `clientSecret` for your application can be generated in the Confidence portal.
+- The `loggerLevel` sets the verbosity level for logging to console. This can be useful while testing your integration with the Confidence SDK.
+- `withContext()` sets the initial context. The context is a key-value map used for sampling and for targeting, so it determines how flags are evaluated by the Confidence backend.
+
+_Note: the Confidence SDK has been intended to work as a single instance in your Application.
+Creating multiple instances in the same runtime could lead to unexpected behaviours._
+
+### Using a self-hosted local resolver sdk or sidecar resolver
+
+Configure a custom resolve base URL to send flag resolve and apply requests to a [Confidence local resolver](https://confidence.spotify.com/docs/flags/local-resolver) or self-hosted sidecar resolver:
+
+```swift
+let confidence = Confidence.Builder(clientSecret: "mysecret")
+    .withResolveBaseUrl(resolveBaseUrl: "http://localhost:8090")
+    .build()
+```
+
+The SDK appends `/v1/flags:resolve` and `/v1/flags:apply` to this URL. Event tracking is not supported by the sidecar resolver and continues to use the Confidence events endpoint selected by `withRegion`.
+
+### Initialization strategy
+
+After creating the Confidence instance, you can choose between different strategies to initialize the SDK:
+
+- `await confidence.fetchAndActivate()`: async function that fetches the flags from the Confidence backend according to the current context, stores the result in storage, and makes the same data ready for the Application to be consumed.
+
+- `confidence.activate()`: this loads previously fetched flags data from storage and makes that available for the Application to consume right away.
+
+If you wish to avoid waiting on backend calls when the Application starts, the suggested approach is to call `confidence.activate()` and then call `confidence.asyncFetch()` to update the flag values in storage to be used on a future `activate()`. 
+
+**Important:** `confidence.activate()` ignores the current context: even if the current context has changed since the last fetch, flag values from the last fetch will be exposed to the Application.
+
+#### Setting context at initialization
+
+If you need to set context before the first flag evaluation (e.g., user ID after login), you have two options:
+
+1. **Fresh fetch (recommended when network latency is acceptable):**
+```swift
+let confidence = Confidence.Builder(clientSecret: "mysecret")
+    .withContext(initialContext: ["user_id": ConfidenceValue(string: "user_1")])
+    .build()
+await confidence.fetchAndActivate()
+```
+
+2. **Fast start with cached data (recommended for instant UI):**
+```swift
+let confidence = Confidence.Builder(clientSecret: "mysecret").build()
+confidence.putContextLocal(context: ["user_id": ConfidenceValue(string: "user_1")])
+try confidence.activate()
+// Optionally fetch in background for next session:
+Task {
+    await confidence.asyncFetch()
+}
+```
+
+This approach works best when the context you set matches the context used to fetch the cached flags (e.g., same user returning to the app). If the context differs from what was used during the last fetch, flag evaluations will return cached values with reason `STALE`, indicating the values may not be accurate for the current context. The background `asyncFetch()` will resolve flags for the new context, making them available on the next `activate()`.
+
+### Managing the context at runtime
+
+The context is set when instantiating the Confidence instance, but it can be updated at runtime. **The recommended approach for changing context during a session is to use `putContextAndWait`:**
+
+```swift
+await confidence.putContextAndWait(context: ["key": ConfidenceValue(string: "value")])
+await confidence.putContextAndWait(key: "key", value: ConfidenceValue(string: "value"))
+await confidence.removeContextAndWait(key: "key")
+```
+
+Each of the above functions is async and performs the following operations when called:
+1. Update the local context
+2. Fetch new flag values from the backend for the updated context
+3. Activate the new values before returning
+
+This ensures that after `await` completes, subsequent flag evaluations use values resolved for the correct context.
+
+#### Alternative: fire-and-forget context changes
+
+If you don't need to wait for the fetch to complete, you can use the non-waiting variants:
+
+```swift
+confidence.putContext(context: ["key": ConfidenceValue(string: "value")])
+confidence.putContext(key: "key", value: ConfidenceValue(string: "value"))
+confidence.removeContext(key: "key")
+```
+
+**Important:** With fire-and-forget context changes, flag evaluations performed while the fetch is in progress will return cached values with reason `STALE`, indicating the values were resolved for a different context.
+
+**Best practice:** Avoid calling `putContext()` followed by `fetchAndActivate()`. Since `putContext()` already triggers a fetch internally, this pattern creates redundant network calls. Instead, use `putContextAndWait()` which handles both the context update and fetch in a single operation, or use `putContextLocal()` + `fetchAndActivate()` if you need to separate context setting from fetching.
+
+#### Local-only context changes
+
+For context changes that should NOT trigger a fetch (e.g., at initialization):
+
+```swift
+confidence.putContextLocal(context: ["key": ConfidenceValue(string: "value")])
+```
+
+This only updates the local context without fetching new flag values. Use this at initialization combined with `activate()`, not during an active session.
+
+_Note: Changing the context could cause a change in the flag values._
+
+The SDK comes with a built in helper class to decorate the Context with some static data from the device. 
+The class is called `ConfidenceDeviceInfoContextDecorator` and used as follows:
+
+```swift
+let context = ConfidenceDeviceInfoContextDecorator(
+    withDeviceInfo: true,
+    withAppInfo: true,
+    withOsInfo: true,
+    withLocale: true
+).decorated(context: [:]); // it's also possible to pass an already prepared context here.
+```
+The values appended to the Context come primarily from the Bundle and the UIDevice APIs.
+
+- `withAppInfo` includes:
+  - version: the value from `CFBundleShortVersionString`.
+  - build: the value from `CFBundleVersion`.
+  - namespace: the `bundleIdentifier`.
+- `withDeviceInfo` includes:
+  - manufacturer: hard coded to Apple.
+  - model: the device model identifier, for example "iPhone15,4" or "iPad14,11".
+  - type: the value from `UIDevice.current.model`.
+- `withOsInfo` includes:
+  - name: the system name.
+  - version: the system version.
+- `withLocale` includes:
+  - locale: the selected Locale.
+  - preferred_languages: the user set preferred languages as set in the Locale.
+
+
+When integrating the SDK in your Application, it's important to understand the implications of changing the context at runtime:
+- You might want to keep the flag values unchanged within a certain session
+- You might want to show a loading UI while re-fetching all flag values
+- You might want the UI to dynamically adapt to underlying changes in flag values
+
+You can find examples on how to implement these different scenarios in the Demo Application project within this repo.
+
+### Read flag values
+Once the Confidence instance is **activated**, you can access the flag values using the
+`getValue` method or the `getEvaluation` functions.
+Both functions use generics to return a type defined by the default value type.
+
+The method `getEvaluation` returns an `Evaluation` object that contains the `value` of the flag, the `reason`
+for the value returned and the `variant` selected.
+
+The method `getValue` will simply return the assigned value or the default.
+In the case of an error, the default value will be returned and the `Evaluation` contains information about the error.
+
+```swift
+let message: String = confidence.getValue(key: "flag-name.message", defaultValue: "default message") 
+let messageFlag: Evaluation<String> = confidence.getEvaluation(key: "flag-name.message", defaultValue: "default message")
+
+let messageValue = messageFlag.value
+// message and messageValue are the same
+```
+
+It's also possible to use Swift Dictionary (`[String: Any]`) type or ConfidenceStruct type as default value, to evaluate flags
+with a complex schema in a single API call. Importantly, there are no guarantees that the value returned by a successful
+evaluation will resemble the structure of the default value, and extra care is advised when parsing the final value
+to avoid runtime errors.
+
+### Tracking events
+The Confidence instance offers APIs to track events, which are uploaded to the Confidence backend:
+```swift
+try confidence.track(eventName: "MyEvent", data: ["field": ConfidenceValue(string("value"))])
+```
+
+The SDK takes care of storing events in case of offline and retries in case of transient failures.
+
+Note that an explicit `"context"` entry in event data overrides the evaluation context attached to that event. Evaluation context is otherwise appended automatically from context set via `putContext` (see below):
+
+To set context data to be appended to all tracked events, here is an example:
+```swift
+confidence.putContext(context: ["os_version": ConfidenceValue(string: "17.0")])
+```

@@ -3,7 +3,7 @@ import os
 
 public class RemoteConfidenceClient: ConfidenceClient {
     private var options: ConfidenceClientOptions
-    private let metadata: ConfidenceMetadata
+    private let telemetry: Telemetry
     private var httpClient: HttpClient
     private var baseUrl: String
     private let debugLogger: DebugLogger?
@@ -11,7 +11,7 @@ public class RemoteConfidenceClient: ConfidenceClient {
     init(
         options: ConfidenceClientOptions,
         session: URLSession? = nil,
-        metadata: ConfidenceMetadata,
+        telemetry: Telemetry,
         debugLogger: DebugLogger? = nil
     ) {
         self.options = options
@@ -28,7 +28,7 @@ public class RemoteConfidenceClient: ConfidenceClient {
             baseUrl: baseUrl,
             timeoutIntervalForRequests: options.timeoutIntervalForRequest
         )
-        self.metadata = metadata
+        self.telemetry = telemetry
         self.debugLogger = debugLogger
     }
 
@@ -42,57 +42,74 @@ public class RemoteConfidenceClient: ConfidenceClient {
             },
             clientSecret: options.credentials.getSecret(),
             sendTime: timeString,
-            sdk: Sdk(id: metadata.name, version: metadata.version)
+            sdk: telemetry.sdk
         )
         do {
             let result: HttpClientResult<PublishEventResponse> =
-            try await self.httpClient.post(path: ":publish", data: request)
+            try await self.httpClient.post(
+                path: ":publish", data: request
+            )
             switch result {
             case .success(let successData):
-                let status = successData.response.statusCode
-                let indecesWithError = successData.decodedData?.errors.map { error in
-                    error.index
-                } ?? []
-                let successEventNames = events.enumerated()
-                    // Filter only events in batch that have no error reported from backend
-                    .filter { index, _ in
-                        return !(indecesWithError.contains(index))
-                    }
-                    .map { _, event in
-                        event.eventDefinition
-                    }
-                switch status {
-                case 200:
-                    // clean up in case of success
-                    debugLogger?.logMessage(
-                        message: "Event upload: HTTP status 200. Events: \(successEventNames.joined(separator: ","))",
-                        isWarning: false
-                    )
-                    return true
-                case 429:
-                    // we shouldn't clean up for rate limiting
-                    debugLogger?.logMessage(
-                        message: "Event upload: HTTP status 429",
-                        isWarning: true
-                    )
-                    return false
-                case 400...499:
-                    // if batch couldn't be processed, we should clean it up
-                    debugLogger?.logMessage(
-                        message: "Event upload: couldn't process batch",
-                        isWarning: true
-                    )
-                    return true
-                default:
-                    debugLogger?.logMessage(
-                        message: "Event upload error. Status code \(status)",
-                        isWarning: true
-                    )
-                    return false
-                }
+                return handleSuccess(successData: successData, events: events)
             case .failure(let errorData):
                 throw handleError(error: errorData)
             }
+        }
+    }
+
+    private func handleSuccess(
+        successData: HttpClientResponse<PublishEventResponse>,
+        events: [NetworkEvent]
+    ) -> Bool {
+        let status = successData.response.statusCode
+        let indicesWithError = successData.decodedData?.errors.map { error in
+            error.index
+        } ?? []
+        let successEventNames = events.enumerated()
+            .filter { index, _ in
+                return !(indicesWithError.contains(index))
+            }
+            .map { _, event in
+                event.eventDefinition
+            }
+        switch status {
+        case 200:
+            if let errors = successData.decodedData?.errors, !errors.isEmpty {
+                for error in errors {
+                    let eventName = events.indices.contains(error.index)
+                        ? events[error.index].eventDefinition
+                        : "index-\(error.index)"
+                    debugLogger?.logMessage(
+                        message: "Event upload rejected: \(eventName) "
+                            + "reason=\(error.reason.rawValue) message=\(error.message)",
+                        isWarning: true
+                    )
+                }
+            }
+            debugLogger?.logMessage(
+                message: "Event upload: HTTP status 200. Events: \(successEventNames.joined(separator: ","))",
+                isWarning: false
+            )
+            return true
+        case 429:
+            debugLogger?.logMessage(
+                message: "Event upload: HTTP status 429",
+                isWarning: true
+            )
+            return false
+        case 400...499:
+            debugLogger?.logMessage(
+                message: "Event upload: couldn't process batch",
+                isWarning: true
+            )
+            return true
+        default:
+            debugLogger?.logMessage(
+                message: "Event upload error. Status code \(status)",
+                isWarning: true
+            )
+            return false
         }
     }
 

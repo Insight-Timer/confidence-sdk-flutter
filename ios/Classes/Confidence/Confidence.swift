@@ -19,6 +19,7 @@ public class Confidence: ConfidenceEventSender {
     private let eventSenderEngine: EventSenderEngine
     private let storage: Storage
     private let flagApplier: FlagApplier
+    private let telemetry: Telemetry
 
     // Synchronization and task management resources
     private var cancellables = Set<AnyCancellable>()
@@ -30,6 +31,10 @@ public class Confidence: ConfidenceEventSender {
 
     public static let sdkId: String = "SDK_ID_SWIFT_CONFIDENCE"
 
+    public func setTelemetryLibraryOpenFeature() {
+        telemetry.library = .openFeature
+    }
+
     required init(
         clientSecret: String,
         region: ConfidenceRegion,
@@ -37,6 +42,7 @@ public class Confidence: ConfidenceEventSender {
         flagApplier: FlagApplier,
         remoteFlagResolver: ConfidenceResolveClient,
         storage: Storage,
+        telemetry: Telemetry,
         context: ConfidenceStruct = [:],
         parent: ConfidenceEventSender? = nil,
         visitorId: String? = nil,
@@ -46,6 +52,7 @@ public class Confidence: ConfidenceEventSender {
         self.clientSecret = clientSecret
         self.region = region
         self.storage = storage
+        self.telemetry = telemetry
         self.contextManager = ContextManager(initialContext: context)
         self.parentContextProvider = parent
         self.flagApplier = flagApplier
@@ -122,7 +129,7 @@ public class Confidence: ConfidenceEventSender {
     default value.
     */
     public func getEvaluation<T>(key: String, defaultValue: T) -> Evaluation<T> {
-        cacheQueue.sync {  [weak self] in
+        let evaluation: Evaluation<T> = cacheQueue.sync {  [weak self] in
             guard let self = self else {
                 return Evaluation(
                     value: defaultValue,
@@ -140,6 +147,8 @@ public class Confidence: ConfidenceEventSender {
                 debugLogger: debugLogger
             )
         }
+        telemetry.trackEvaluation(reason: evaluation.reason, errorCode: evaluation.errorCode)
+        return evaluation
     }
 
     /**
@@ -158,63 +167,30 @@ public class Confidence: ConfidenceEventSender {
     }
 
     public func putContextAndWait(key: String, value: ConfidenceValue) async {
-        taskManager.currentTask = Task {
-            let newContext = contextManager.updateContext(withValues: [key: value], removedKeys: [])
-            do {
-                try await self.fetchAndActivate()
-                debugLogger?.logContext(action: "PutContext", context: newContext)
-            } catch {
-                debugLogger?.logMessage(message: "Error when putting context: \(error)", isWarning: true)
-            }
-        }
-        await awaitReconciliation()
+        _ = await scheduleContextChange(context: [key: value], removedKeys: [], logAction: "PutContext")
     }
 
     public func putContextAndWait(context: ConfidenceStruct, removedKeys: [String] = []) async {
-        taskManager.currentTask = Task {
-            let newContext = contextManager.updateContext(withValues: context, removedKeys: removedKeys)
-            do {
-                try await self.fetchAndActivate()
-                debugLogger?.logContext(action: "PutContext", context: newContext)
-            } catch {
-                debugLogger?.logMessage(message: "Error when putting context: \(error)", isWarning: true)
-            }
-        }
-        await awaitReconciliation()
+        _ = await scheduleContextChange(context: context, removedKeys: removedKeys, logAction: "PutContext")
     }
 
     public func putContextAndWait(context: ConfidenceStruct) async {
-        taskManager.currentTask = Task {
-            let newContext = contextManager.updateContext(withValues: context, removedKeys: [])
-            do {
-                try await fetchAndActivate()
-                debugLogger?.logContext(
-                    action: "PutContext",
-                    context: newContext)
-            } catch {
-                debugLogger?.logMessage(
-                    message: "Error when putting context: \(error)",
-                    isWarning: true)
-            }
-        }
-        await awaitReconciliation()
+        _ = await scheduleContextChange(context: context, removedKeys: [], logAction: "PutContext")
     }
 
     public func removeContextAndWait(key: String) async {
-        taskManager.currentTask = Task {
-            let newContext = contextManager.updateContext(withValues: [:], removedKeys: [key])
-            do {
-                try await self.fetchAndActivate()
-                debugLogger?.logContext(
-                    action: "RemoveContext",
-                    context: newContext)
-            } catch {
-                debugLogger?.logMessage(
-                    message: "Error when removing context key: \(error)",
-                    isWarning: true)
-            }
-        }
-        await awaitReconciliation()
+        _ = await scheduleContextChange(context: [:], removedKeys: [key], logAction: "RemoveContext")
+    }
+
+    /**
+    Applies context and fetches flags for it.
+    Returns success only when the fetch is stored and activated; does not throw.
+    */
+    public func reconcileContext(
+        context: ConfidenceStruct,
+        removedKeys: [String] = []
+    ) async -> Result<Void, Error> {
+        await scheduleContextChange(context: context, removedKeys: removedKeys, logAction: "PutContext")
     }
 
     /**
@@ -229,41 +205,33 @@ public class Confidence: ConfidenceEventSender {
 
     public func putContext(key: String, value: ConfidenceValue) {
         taskManager.currentTask = Task {
-            await putContextAndWait(key: key, value: value)
+            await self.performContextChange(context: [key: value], removedKeys: [], logAction: "PutContext")
         }
     }
 
     public func putContext(context: ConfidenceStruct) {
         taskManager.currentTask = Task {
-            await putContextAndWait(context: context)
+            await self.performContextChange(context: context, removedKeys: [], logAction: "PutContext")
         }
     }
 
     public func putContext(context: ConfidenceStruct, removeKeys removedKeys: [String] = []) {
         taskManager.currentTask = Task {
-            await putContextAndWait(context: context, removedKeys: removedKeys)
+            await self.performContextChange(
+                context: context, removedKeys: removedKeys, logAction: "PutContext")
         }
     }
 
     public func removeContext(key: String) {
         taskManager.currentTask = Task {
-            await removeContextAndWait(key: key)
+            await self.performContextChange(context: [:], removedKeys: [key], logAction: "RemoveContext")
         }
     }
 
     public func putContext(context: ConfidenceStruct, removedKeys: [String]) {
         taskManager.currentTask = Task {
-            let newContext = contextManager.updateContext(withValues: context, removedKeys: removedKeys)
-            do {
-                try await self.fetchAndActivate()
-                debugLogger?.logContext(
-                    action: "RemoveContext",
-                    context: newContext)
-            } catch {
-                debugLogger?.logMessage(
-                    message: "Error when putting context: \(error)",
-                    isWarning: true)
-            }
+            await self.performContextChange(
+                context: context, removedKeys: removedKeys, logAction: "RemoveContext")
         }
     }
 
@@ -274,6 +242,44 @@ public class Confidence: ConfidenceEventSender {
         await taskManager.awaitReconciliation()
     }
 
+    private func scheduleContextChange(
+        context: ConfidenceStruct,
+        removedKeys: [String],
+        logAction: String
+    ) async -> Result<Void, Error> {
+        taskManager.currentTask = Task {
+            await self.performContextChange(
+                context: context, removedKeys: removedKeys, logAction: logAction)
+        }
+        return await taskManager.awaitReconciliation()
+    }
+
+    private func performContextChange(
+        context: ConfidenceStruct,
+        removedKeys: [String],
+        logAction: String
+    ) async -> Result<Void, Error> {
+        if Task.isCancelled {
+            return .failure(CancellationError())
+        }
+
+        let newContext = contextManager.updateContext(withValues: context, removedKeys: removedKeys)
+        do {
+            try await internalFetch()
+            try activate()
+            debugLogger?.logContext(action: logAction, context: newContext)
+            return .success(())
+        } catch is CancellationError {
+            return .failure(CancellationError())
+        } catch {
+            debugLogger?.logMessage(
+                message: "Error when putting context: \(error)",
+                isWarning: true)
+            try? activate()
+            return .failure(error)
+        }
+    }
+
     public func withContext(_ context: ConfidenceStruct) -> ConfidenceEventSender {
         return Self.init(
             clientSecret: clientSecret,
@@ -282,6 +288,7 @@ public class Confidence: ConfidenceEventSender {
             flagApplier: flagApplier,
             remoteFlagResolver: remoteFlagResolver,
             storage: storage,
+            telemetry: telemetry,
             context: context,
             parent: self,
             debugLogger: debugLogger
@@ -330,6 +337,14 @@ public class Confidence: ConfidenceEventSender {
 
     public func flush() {
         eventSenderEngine.flush()
+    }
+
+    /**
+    Flush pending tracked events and shut down the event sender engine.
+    Call when the SDK is no longer needed, for example on app termination.
+    */
+    public func stop() {
+        eventSenderEngine.shutdown()
     }
 }
 
@@ -386,8 +401,10 @@ extension Confidence {
 
         // Can be configured
         internal var region: ConfidenceRegion = .global
+        internal var resolveBaseUrl: String?
         internal var initialContext: ConfidenceStruct = [:]
         internal var timeout: Double = 10
+        internal var eventFlushInterval = EventSenderEngineImpl.defaultFlushInterval
 
         // Injectable for testing
         internal var flagApplier: FlagApplier?
@@ -447,11 +464,30 @@ extension Confidence {
             return self
         }
 
+        /**
+        Set a custom base URL for resolving and applying flags.
+        Event tracking continues to use the endpoint selected by `withRegion`.
+        */
+        public func withResolveBaseUrl(resolveBaseUrl: String) -> Builder {
+            self.resolveBaseUrl = resolveBaseUrl
+            return self
+        }
+
     /**
     Set the timeout for the network request, defaulting to 10 seconds.
     */
         public func withTimeout(timeout: Double) -> Builder {
             self.timeout = timeout
+            return self
+        }
+
+        /**
+        Set the periodic flush interval for tracked events, in seconds. Defaults to 60 seconds.
+        Pending events are uploaded on this interval even if the batch size threshold has not been reached.
+        Set a non-positive interval to disable periodic flushing.
+        */
+        public func withEventFlushInterval(_ interval: TimeInterval) -> Builder {
+            self.eventFlushInterval = interval
             return self
         }
 
@@ -468,36 +504,40 @@ extension Confidence {
             let options = ConfidenceClientOptions(
                 credentials: ConfidenceClientCredentials.clientSecret(secret: clientSecret),
                 region: region,
+                resolveBaseUrl: resolveBaseUrl,
                 timeoutIntervalForRequest: timeout)
-            let metadata = ConfidenceMetadata(
-                name: sdkId,
-                version: "1.4.4") // x-release-please-version
+            let telemetry = Telemetry(
+                sdkId: sdkId,
+                library: .confidence,
+                libraryVersion: "1.5.0", // x-release-please-version
+                debugLogger: debugLogger)
             let uploader = RemoteConfidenceClient(
                 options: options,
-                metadata: metadata,
+                telemetry: telemetry,
                 debugLogger: debugLogger
             )
             let httpClient = NetworkClient(
-                baseUrl: BaseUrlMapper.from(region: options.region),
+                baseUrl: BaseUrlMapper.from(options: options),
                 timeoutIntervalForRequests: options.timeoutIntervalForRequest
             )
             let flagApplier = flagApplier ?? FlagApplierWithRetries(
                 httpClient: httpClient,
                 storage: DefaultStorage(filePath: "confidence.flags.apply"),
                 options: options,
-                metadata: metadata,
+                telemetry: telemetry,
                 debugLogger: debugLogger
             )
             let flagResolver = flagResolver ?? RemoteConfidenceResolveClient(
                 options: options,
                 applyOnResolve: false,
-                metadata: metadata
+                telemetry: telemetry
             )
             let eventSenderEngine = EventSenderEngineImpl(
                 clientSecret: clientSecret,
                 uploader: uploader,
                 storage: eventStorage,
-                debugLogger: debugLogger
+                debugLogger: debugLogger,
+                flushInterval: eventFlushInterval
             )
             return Confidence(
                 clientSecret: clientSecret,
@@ -506,6 +546,7 @@ extension Confidence {
                 flagApplier: flagApplier,
                 remoteFlagResolver: flagResolver,
                 storage: storage ?? DefaultStorage(filePath: "confidence.flags.resolve"),
+                telemetry: telemetry,
                 context: initialContext,
                 parent: nil,
                 visitorId: visitorId,
