@@ -50,4 +50,12 @@ void main() {
       'loggingLevel': 'WARN',
     });
   });
+
+  test('removeContext forwards the key to the native SDKs', () async {
+    await platform.removeContext('user_id');
+
+    expect(methodCalls, hasLength(1));
+    expect(methodCalls.single.method, 'removeContext');
+    expect(methodCalls.single.arguments, <String, Object>{'key': 'user_id'});
+  });
 }

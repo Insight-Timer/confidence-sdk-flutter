@@ -57,6 +57,11 @@ class MethodChannelConfidenceFlutterSdk extends ConfidenceFlutterSdkPlatform {
   }
 
   @override
+  Future<void> removeContext(String key) async {
+    await methodChannel.invokeMethod<void>('removeContext', {'key': key});
+  }
+
+  @override
   void track(String eventName, Map<String, dynamic> data) {
     final wrappedData = data.map((key, value) {
       return MapEntry(key, toTypedValue(value));

@@ -86,6 +86,14 @@ public class ConfidenceFlutterSdkPlugin: NSObject, FlutterPlugin {
                 result("")
             }
             break;
+        case "removeContext":
+            guard let args = call.arguments as? Dictionary<String, Any>, let key = args["key"] as? String else {
+                result("")
+                return
+            }
+            confidence?.removeContext(key: key)
+            result("")
+            break;
         case "putContext":
             guard let args = call.arguments as? Dictionary<String, Any> else {
                 result("")

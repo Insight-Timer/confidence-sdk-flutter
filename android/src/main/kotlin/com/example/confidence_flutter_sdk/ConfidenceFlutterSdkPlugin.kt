@@ -117,6 +117,11 @@ class ConfidenceFlutterSdkPlugin: FlutterPlugin, MethodCallHandler, ActivityAwar
           result.success(Json.encodeToString(NetworkConfidenceValueSerializer, ConfidenceValue.Struct(map)))
         }
       }
+      "removeContext" -> {
+        val key = call.argument<String>("key")!!
+        confidence.removeContext(key)
+        result.success(null)
+      }
       "putContext" -> {
         val key = call.argument<String>("key")!!
         val value = call.argument<Map<String, Any>>("value")!!.convert()

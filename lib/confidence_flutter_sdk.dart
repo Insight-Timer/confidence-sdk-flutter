@@ -23,6 +23,13 @@ class ConfidenceFlutterSdk {
     }
   }
 
+  Future<void> removeContext(String key) async {
+    await ConfidenceFlutterSdkPlatform.instance.removeContext(key);
+    if(isInitialized) {
+      await fetchAndActivate();
+    }
+  }
+
   void track(String eventName, Map<String, dynamic> data) {
     ConfidenceFlutterSdkPlatform.instance.track(eventName, data);
   }
