@@ -16,6 +16,7 @@ import io.flutter.plugin.common.MethodChannel.MethodCallHandler
 import io.flutter.plugin.common.MethodChannel.Result
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.Json
 import java.io.File
@@ -63,16 +64,16 @@ class ConfidenceFlutterSdkPlugin: FlutterPlugin, MethodCallHandler, ActivityAwar
         result.success(null)
       }
       "fetchAndActivate" -> {
-        coroutineScope.launch {
+        launchReplying(call, result) {
           confidence.fetchAndActivate()
-          result.success(null)
+          null
         }
       }
       "activateAndFetchAsync" -> {
-        coroutineScope.launch {
+        launchReplying(call, result) {
           confidence.activate()
           confidence.asyncFetch()
-          result.success(null)
+          null
         }
       }
       "isStorageEmpty" -> {
@@ -111,10 +112,10 @@ class ConfidenceFlutterSdkPlugin: FlutterPlugin, MethodCallHandler, ActivityAwar
         result.success(Json.encodeToString(NetworkConfidenceValueSerializer, value))
       }
       "readAllFlags" -> {
-        coroutineScope.launch {
+        launchReplying(call, result) {
           val flags = readAllFlags()
           val map = flags.flags.associateBy({ it.flag }, { ConfidenceValue.Struct(it.value) })
-          result.success(Json.encodeToString(NetworkConfidenceValueSerializer, ConfidenceValue.Struct(map)))
+          Json.encodeToString(NetworkConfidenceValueSerializer, ConfidenceValue.Struct(map))
         }
       }
       "putContext" -> {
@@ -139,15 +140,33 @@ class ConfidenceFlutterSdkPlugin: FlutterPlugin, MethodCallHandler, ActivityAwar
     }
   }
 
-  private fun readAllFlags(): FlagResolution {
+  // An uncaught exception in a coroutine would crash the app, so failures go back to Dart instead.
+  private fun launchReplying(call: MethodCall, result: Result, block: suspend () -> Any?) {
+    coroutineScope.launch {
+      val value = try {
+        block()
+      } catch (e: Exception) {
+        result.error("error", e.message, "${call.method}: $e")
+        return@launch
+      }
+      result.success(value)
+    }
+  }
+
+  // The SDK rewrites this file without letting us take its lock, so a read can catch it half-written.
+  private suspend fun readAllFlags(): FlagResolution {
     val flagsFile = File(context.filesDir, "confidence_flags_cache.json")
+    repeat(READ_ATTEMPTS - 1) {
+      runCatching { readFlagsFile(flagsFile) }.getOrNull()?.let { return it }
+      delay(READ_RETRY_DELAY_MS)
+    }
+    return readFlagsFile(flagsFile) ?: FlagResolution.EMPTY
+  }
+
+  private fun readFlagsFile(flagsFile: File): FlagResolution? {
     if (!flagsFile.exists()) return FlagResolution.EMPTY
     val fileText: String = flagsFile.bufferedReader().use { it.readText() }
-    return if (fileText.isEmpty()) {
-      FlagResolution.EMPTY
-    } else {
-      Json.decodeFromString(fileText)
-    }
+    return if (fileText.isEmpty()) null else Json.decodeFromString(fileText)
   }
 
   override fun onDetachedFromEngine(binding: FlutterPlugin.FlutterPluginBinding) {
@@ -170,6 +189,9 @@ class ConfidenceFlutterSdkPlugin: FlutterPlugin, MethodCallHandler, ActivityAwar
 
   }
 }
+
+private const val READ_ATTEMPTS = 4
+private const val READ_RETRY_DELAY_MS = 50L
 
 private fun Map<String, Any>.convert(): ConfidenceValue {
   when(val type = this["type"] as String) {
